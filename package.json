@@ -1,0 +1,30 @@
+{
+  "name": "copilotkit-observability-demo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@copilotkit/react-core": "^1.57.0",
+    "@copilotkit/runtime": "^1.57.0",
+    "lucide-react": "^0.395.0",
+    "next": "^14.2.0",
+    "openai": "^4.52.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@tailwindcss/postcss": "^4.0.0",
+    "eslint": "^8",
+    "eslint-config-next": "^14.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5"
+  }
+}
