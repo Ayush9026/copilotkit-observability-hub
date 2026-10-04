@@ -4,7 +4,7 @@
   # CopilotKit Observability Hub 🚀
   
   **Open the black box of your AI Agents.**  
-  *A companion repository to the ["How to Log CopilotKit Agent Interactions"](BLOG_POST.md) guide.*
+  *A companion repository to the "How to Log CopilotKit Agent Interactions" guide.*
 
   [![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat&logo=next.js)](https://nextjs.org/)
   [![CopilotKit](https://img.shields.io/badge/CopilotKit-v2-blue?style=flat&logo=react)](https://docs.copilotkit.ai/)
@@ -24,7 +24,10 @@ When building AI agents, standard server logs aren't enough. You need to know:
 - *What specific tools or MCP servers did the agent invoke?*
 - *Did the user regenerate the response?*
 
-This project implements a **Real-Time Telemetry HUD** alongside a CopilotKit chat interface to capture all of this automatically using `useAgent`.
+This project implements a **Real-Time Telemetry HUD** alongside a CopilotKit chat interface. It captures this automatically by subscribing to the agent's live AG-UI event stream with `useAgent` — session lifecycle, measured latency and time-to-first-token, MCP retrieval steps, and errors are all read from the real stream.
+
+> [!NOTE]
+> To keep the demo self-contained, `/api/copilotkit` runs a **built-in mock agent** that streams realistic AG-UI events (steps, reasoning, text) — no LLM API key required. Token counts are **content-derived estimates** (labelled as such in the HUD), since the mock agent isn't billed by a provider. When you swap in a real LLM-backed agent that reports usage on `RUN_FINISHED`, the HUD will surface those exact counts instead.
 
 ## 🏗️ Architecture at a Glance
 
@@ -59,19 +62,14 @@ npm install
 yarn install
 ```
 
-### 2. Configure Environment
-Create a `.env.local` file in the root directory and add your LLM provider keys (e.g., OpenAI). Check `.env.local.example` if available.
-```env
-OPENAI_API_KEY="your-api-key-here"
-```
-
-### 3. Launch the Hub
+### 2. Launch the Hub
+The demo's mock agent needs no API key, so you can run it straight away:
 ```bash
 npm run dev
 ```
 
 > [!TIP]
-> **Try this out:** Open [http://localhost:3000](http://localhost:3000). Type *"Calculate the Fibonacci sequence up to 10"* in the chat. Watch the Telemetry HUD on the right capture the latency, session start, and token metrics instantly!
+> **Try this out:** Open [http://localhost:3000](http://localhost:3000). Send a message like *"explain mcp server advantages"* in the chat. Watch the Telemetry HUD on the right capture the session start, measured latency, time-to-first-token, the MCP retrieval step, and an estimated token count — all read live from the agent's event stream.
 
 ---
 
@@ -82,15 +80,14 @@ If you are poking around the source code, here is where the magic happens:
 | Component | Location | What it does |
 |-----------|----------|--------------|
 | **The Telemetry Logger** | `lib/logger.ts` | The typed event emitter that intercepts all agent actions. |
-| **Observable Chat** | `components/ObservableChat.tsx` | The wrapper around `<CopilotChat />` that uses `useAgent` to track latency without blocking the UI. |
+| **Observable Chat** | `components/ObservableChat.tsx` | The wrapper around `<CopilotChat />` that subscribes to the agent's AG-UI event stream via `useAgent` to log telemetry without blocking the UI. |
 | **Debug HUD** | `components/DebugPanel.tsx` | The gorgeous right-side panel that visualizes the metrics in real time. |
 | **Admin Logs** | `app/admin/logs/page.tsx` | The historical logs commander dashboard for filtering past events. |
 
 ## 📖 Further Reading
 
-- Read the full tutorial: [How to Log CopilotKit Agent Interactions](BLOG_POST.md)
 - Explore the [CopilotKit Documentation](https://docs.copilotkit.ai/)
-- Check out the [CopilotKit VS Code Extension](https://docs.copilotkit.ai/getting-started/quickstart-vscode) for deep IDE integrations.
+- Check out the [CopilotKit VS Code Extension](https://marketplace.visualstudio.com/items?itemName=CopilotKit.copilotkit-vscode) for deep IDE integrations.
 
 ---
 <div align="center">

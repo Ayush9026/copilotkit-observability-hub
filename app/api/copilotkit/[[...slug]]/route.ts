@@ -1,7 +1,11 @@
-import { CopilotRuntime, OpenAIAdapter, copilotRuntimeNextJSAppRouterEndpoint } from "@copilotkit/runtime";
-import { NextRequest } from "next/server";
+import { CopilotRuntime, InMemoryAgentRunner, createCopilotHonoHandler } from "@copilotkit/runtime/v2";
+import { handle } from "hono/vercel";
 import { AbstractAgent, BaseEvent, EventType, RunAgentInput } from "@ag-ui/client";
 import { Observable } from "rxjs";
+
+// This route runs on the Node.js runtime (the in-memory runner keeps run state
+// in module scope, which the edge runtime would not preserve).
+export const runtime = "nodejs";
 
 // ObservabilityMockAgent subclassing the required AbstractAgent base class.
 // This implements correct v2 telemetry and offline agent-execution streams.
@@ -21,11 +25,33 @@ class ObservabilityMockAgent extends AbstractAgent {
       const stepId = "step-" + Math.random().toString(36).substring(7);
       const reasoningId = "reas-" + Math.random().toString(36).substring(7);
 
+      // Rough token estimator (~4 chars/token). This is a heuristic, not a
+      // billing-grade tokenizer — labelled as an estimate on the client.
+      const estimateTokens = (text: string) => Math.max(0, Math.ceil(text.length / 4));
+
       const runSequence = async () => {
         // Parse user query for smart coding assistant behavior
         const messages = input.messages || [];
         const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
         const prompt = (lastUserMsg?.content || "").toString().toLowerCase();
+
+        // Accumulate the full prompt + completion so we can report real
+        // (content-derived) token counts on RUN_FINISHED.
+        const promptText = messages
+          .map((m: any) => (typeof m.content === "string" ? m.content : ""))
+          .join(" ");
+        let completionText = "";
+
+        // 0. Emit Run Started. AG-UI requires RUN_STARTED as the very first
+        // event of a run — @ag-ui/client's verifyEvents rejects any stream that
+        // opens with a different type ("First event must be 'RUN_STARTED'"),
+        // which aborts the run before a single subscriber callback fires.
+        subscriber.next({
+          type: EventType.RUN_STARTED,
+          runId,
+          threadId: input.threadId,
+          timestamp: Date.now(),
+        } as any as BaseEvent);
 
         // 1. Emit Step Started
         subscriber.next({
@@ -45,7 +71,7 @@ class ObservabilityMockAgent extends AbstractAgent {
             type: EventType.STEP_STARTED,
             runId,
             stepId: mcpStepId,
-            stepName: "MCP Server: Fetching CopilotKit Coding Agent Docs",
+            stepName: "MCP: Retrieving CopilotKit docs",
             timestamp: Date.now(),
           } as any as BaseEvent);
           await sleep(550);
@@ -54,6 +80,9 @@ class ObservabilityMockAgent extends AbstractAgent {
             type: EventType.STEP_FINISHED,
             runId,
             stepId: mcpStepId,
+            // AG-UI matches STEP_FINISHED to its STEP_STARTED by stepName, so it
+            // must equal the name emitted above or verifyEvents rejects the run.
+            stepName: "MCP: Retrieving CopilotKit docs",
             timestamp: Date.now(),
           } as any as BaseEvent);
           await sleep(200);
@@ -118,11 +147,13 @@ class ObservabilityMockAgent extends AbstractAgent {
         } as any as BaseEvent);
         await sleep(200);
 
-        // 3. Emit Step Finished
+        // 3. Emit Step Finished. stepName must match the opening STEP_STARTED
+        // (AG-UI closes steps by name, not by stepId).
         subscriber.next({
           type: EventType.STEP_FINISHED,
           runId,
           stepId,
+          stepName: "Parsing Query & Planning Response",
           timestamp: Date.now(),
         } as any as BaseEvent);
         await sleep(250);
@@ -153,18 +184,19 @@ class ObservabilityMockAgent extends AbstractAgent {
         } else if (prompt.includes("mcp") || prompt.includes("agent") || prompt.includes("code") || prompt.includes("doc")) {
           responseChunks = [
             "### 🤖 CopilotKit Coding Agent - MCP Integrations\n\n",
-            "Using the **Model Context Protocol (MCP) server** transforms standard agents into CopilotKit integration experts.\n\n",
-            "**Key benefits of the MCP server:**\n",
-            "1. **Live Docs Access:** Fetches real-time updates directly from the official [CopilotKit Docs](https://docs.copilotkit.ai).\n",
-            "2. **Strict v2 Typings:** Guarantees that generated agent logic complies with the latest stable components without hallucinating properties.\n\n",
+            "CopilotKit lets you connect your agent to external **Model Context Protocol (MCP) servers** (for example Composio) so it can call tools and pull in extra context.\n\n",
+            "**What MCP gives your agent:**\n",
+            "1. **External tools & context:** Wire the agent up to MCP servers you configure to fetch data or take actions.\n",
+            "2. **Grounded answers:** Feeding docs or code context in through MCP reduces guesswork versus relying on the model alone.\n\n",
+            "See the [CopilotKit docs](https://docs.copilotkit.ai/) for how to configure MCP servers.\n\n",
             "**Try this prompt in your IDE agent:**\n",
-            "`Use the CopilotKit MCP server to add a new custom agent that reads database queries in route.ts.`"
+            "`Add a new custom agent in route.ts that reads database queries.`"
           ];
         } else {
           responseChunks = [
             "### 🚀 CopilotKit Coding Agent - Observability Active\n\n",
             "Hello! I am your interactive **Coding Assistant**, operating within a highly observable React environment.\n\n",
-            "I checked your query and ran it through the **Model Context Protocol (MCP)** doc retriever to index optimal observability configurations.\n\n",
+            "This is a demo agent: it streams AG-UI events (steps, reasoning, text) that the Observability HUD captures as real telemetry.\n\n",
             "**Try asking me about:**\n",
             "- `how to fix compilation errors` 🛠️\n",
             "- `explain mcp server advantages` 🤖\n",
@@ -174,6 +206,7 @@ class ObservabilityMockAgent extends AbstractAgent {
         }
 
         for (const chunk of responseChunks) {
+          completionText += chunk;
           subscriber.next({
             type: EventType.TEXT_MESSAGE_CONTENT,
             runId,
@@ -190,14 +223,29 @@ class ObservabilityMockAgent extends AbstractAgent {
           messageId,
           timestamp: Date.now(),
         } as any as BaseEvent);
+
+        return {
+          promptTokens: estimateTokens(promptText),
+          completionTokens: estimateTokens(completionText),
+        };
       };
 
       runSequence()
-        .then(() => {
+        .then(({ promptTokens, completionTokens }) => {
           subscriber.next({
             type: EventType.RUN_FINISHED,
             runId: input.runId,
             threadId: input.threadId,
+            // Real, content-derived usage carried on RUN_FINISHED.result.
+            // AG-UI has no first-class usage field, so the client reads it here.
+            result: {
+              usage: {
+                promptTokens,
+                completionTokens,
+                totalTokens: promptTokens + completionTokens,
+                estimated: true,
+              },
+            },
             timestamp: Date.now(),
           } as any as BaseEvent);
           subscriber.complete();
@@ -220,32 +268,15 @@ class ObservabilityMockAgent extends AbstractAgent {
   }
 }
 
-// CopilotRuntime: serviceAdapter is NOT a constructor param in v1.57.
-// It is passed to copilotRuntimeNextJSAppRouterEndpoint.
-// Since ObservabilityMockAgent handles all responses, we use OpenAIAdapter as the
-// service adapter for the endpoint so the runtime has a valid LLM backend reference.
-const mockOpenAI = {
-  chat: {
-    completions: {
-      create: async (params: any) => {
-        if (params.stream) {
-          async function* makeStream() {
-            yield { choices: [{ delta: { role: "assistant", content: "" }, finish_reason: "stop" }] };
-          }
-          return makeStream();
-        }
-        return { choices: [{ message: { role: "assistant", content: "" } }] };
-      },
-    },
-  },
-} as any;
-
-const serviceAdapter = new OpenAIAdapter({ openai: mockOpenAI });
-
-const runtime = new CopilotRuntime({
+// Official CopilotKit v2 runtime. The InMemoryAgentRunner runs agents in-process
+// (SSE mode) with no external services or LLM API key required — the demo stays
+// self-contained. The ObservabilityMockAgent is registered under "research-agent",
+// matching the agentId used by useAgent() and <CopilotChat> on the frontend.
+const copilotRuntime = new CopilotRuntime({
   agents: {
     "research-agent": new ObservabilityMockAgent(),
   },
+  runner: new InMemoryAgentRunner(),
   debug: {
     events: true,
     lifecycle: true,
@@ -253,13 +284,22 @@ const runtime = new CopilotRuntime({
   },
 });
 
-export const POST = async (req: NextRequest) => {
-  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
-    runtime,
-    serviceAdapter,
-    endpoint: "/api/copilotkit",
-  });
-  return handleRequest(req);
-};
+// createCopilotHonoHandler builds a Hono app exposing the full v2 route surface
+// (agent discovery, run, thread endpoints) under basePath. hono/vercel's `handle`
+// adapts it to the Next.js App Router request/response contract.
+//
+// This route lives in an optional catch-all segment ([[...slug]]) so it matches
+// both /api/copilotkit and every sub-path the v2 frontend calls (/info,
+// /agent/<id>/run, /threads/...). A plain route.ts would only match the exact
+// base path and 404 the discovery + run requests.
+const app = createCopilotHonoHandler({
+  runtime: copilotRuntime,
+  basePath: "/api/copilotkit",
+});
 
-
+// Export every verb the v2 frontend uses: GET drives the /info agent-discovery
+// sync, POST runs the agent, and PATCH/DELETE back the thread lifecycle routes.
+export const GET = handle(app);
+export const POST = handle(app);
+export const PATCH = handle(app);
+export const DELETE = handle(app);

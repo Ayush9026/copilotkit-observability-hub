@@ -78,10 +78,10 @@ export const DebugPanel: React.FC = () => {
 
       const errors = currentLogs.filter((l: AgentInteraction) => l.type === "AGENT_ERROR_OCCURRED");
       const mcpFetches = currentLogs.filter((l: AgentInteraction) => l.type === "MCP_DOCS_RETRIEVED");
-      
-      const manualRetries = tokenEvents.reduce((acc: number, curr: AgentInteraction) => {
-        return acc + (curr.details?.retryCount || 0);
-      }, 0) + errors.length;
+
+      // Real, event-driven count: one per RUN_ERROR emitted by the agent stream.
+      // (There is no retry channel in the mock agent, so nothing is fabricated.)
+      const errorCount = errors.length;
 
       const latestIsStart = currentLogs[0]?.type === "SESSION_START";
 
@@ -98,7 +98,7 @@ export const DebugPanel: React.FC = () => {
         // Granular Telemetry Assigns
         totalTokensUsed: totalTokens,
         timeToFirstTokenMs: avgTTFT,
-        retryCount: manualRetries,
+        retryCount: errorCount,
         mcpRequestsCount: mcpFetches.length
       });
     };
@@ -196,6 +196,7 @@ export const DebugPanel: React.FC = () => {
           <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
             <Cpu className="w-3 h-3 text-purple-400" />
             Tokens Count
+            <span className="text-[8px] text-slate-500 font-semibold normal-case tracking-normal">(Estimated)</span>
           </span>
           <span className="text-sm font-bold text-purple-400 mt-1">{stats.totalTokensUsed} <span className="text-[9px] text-slate-500">t</span></span>
         </div>
@@ -204,6 +205,7 @@ export const DebugPanel: React.FC = () => {
           <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
             <Network className="w-3 h-3 text-teal-400" />
             MCP Doc Fetches
+            <span className="text-[8px] text-slate-500 font-semibold normal-case tracking-normal">(Simulated)</span>
           </span>
           <span className="text-sm font-bold text-teal-400 mt-1">{stats.mcpRequestsCount} <span className="text-[9px] text-slate-500">runs</span></span>
         </div>
@@ -221,7 +223,7 @@ export const DebugPanel: React.FC = () => {
         <div className="bg-slate-950/40 border border-slate-800/60 rounded-xl p-3 flex flex-col justify-between hover:border-rose-500/20 transition-all">
           <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
             <RefreshCw className="w-3 h-3 text-rose-400" />
-            Retries & Fails
+            Run Errors
           </span>
           <span className={`text-sm font-bold mt-1 ${stats.retryCount > 0 ? "text-rose-400 animate-pulse" : "text-slate-400"}`}>
             {stats.retryCount}
